@@ -83,14 +83,16 @@ var (
 	showVersion          bool
 	queueSize            int
 	lineDelimiter        byte = '\n'
-	bufferPool           = sync.Pool{
+	bufferPool                = sync.Pool{
 		New: func() interface{} {
 			return make([]byte, 0, bufferSize)
 		},
 	}
-	loadInfo  *loader.LoadInfo
-	loadResp  *loader.Resp
-	startTime time.Time
+	loadInfo    *loader.LoadInfo
+	loadResp    *loader.Resp
+	startTime   time.Time
+	startOffset int64
+	endOffset   int64
 )
 
 func initFlags() {
@@ -117,6 +119,8 @@ func initFlags() {
 	flag.BoolVar(&debug, "debug", false, "enable debug")
 	flag.BoolVar(&showVersion, "version", false, "Display the version")
 	flag.IntVar(&queueSize, "queue_size", defaultQueueSize, "memory queue size")
+	flag.Int64Var(&startOffset, "start", 0, "stat offset of file to start read from, default 0")
+	flag.Int64Var(&endOffset, "end", math.MaxInt64, "end offset of file to end read, default max int64")
 
 	flag.Parse()
 
@@ -187,6 +191,8 @@ func initFlags() {
 		fmt.Println("retry_times: ", maxRetryTimes)
 		fmt.Println("retry_interval: ", retryInterval)
 		fmt.Println("queue_size: ", queueSize)
+		fmt.Println("startOffset: ", startOffset)
+		fmt.Println("endOffset: ", endOffset)
 	}
 
 	utils.InitLog(logLevel)
@@ -389,6 +395,11 @@ func main() {
 		// create file reader
 		fileSize := int64(0)
 		reader := file.NewFileReader(sourceFilePaths, batchRows, batchBytes, fileBufferSize, &queues, &bufferPool, &fileSize)
+
+		if endOffset != math.MaxInt64 {
+			fileSize = endOffset - startOffset
+		}
+
 		calculateAndCheckWorkers(reader, fileSize)
 		createQueues(&queues)
 		reporter := report.NewReporter(reportDuration, fileSize, uint64(workers))
@@ -401,7 +412,7 @@ func main() {
 		streamLoad.Load(workers, maxRowsPerTask, maxBytesPerTask, &retryInfo)
 		reporter.Report()
 		defer reporter.CloseWait()
-		reader.Read(reporter, workers, maxBytesPerTask, &retryInfo, loadResp, retryCount, lineDelimiter)
+		reader.Read(reporter, workers, maxBytesPerTask, &retryInfo, loadResp, retryCount, lineDelimiter, startOffset, endOffset)
 		reader.Close()
 
 		streamLoad.Wait(loadInfo, retryCount, &retryInfo, startTime)

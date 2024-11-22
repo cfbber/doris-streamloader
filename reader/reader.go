@@ -110,7 +110,7 @@ func NewFileReader(filePaths string, batchRows int, batchBytes int, bufferSize i
 
 // Read File
 func (f *FileReader) Read(reporter *report.Reporter, workers int, maxBytesPerTask int, retryInfo *map[int]int,
-	loadResp *loader.Resp, retryCount int, lineDelimiter byte) {
+	loadResp *loader.Resp, retryCount int, lineDelimiter byte, startOffset int64, endOffset int64) {
 	index := 0
 	data := f.pool.Get().([]byte)
 	count := f.batchRows
@@ -125,6 +125,19 @@ func (f *FileReader) Read(reporter *report.Reporter, workers int, maxBytesPerTas
 	}
 
 	for _, file := range f.files {
+
+		// 定位到 offset 位置
+		if _, err := file.Seek(startOffset, 0); err != nil {
+			log.Errorf("failed to seek file: %v", err)
+			return
+		}
+		var totalBytes int64 = startOffset
+		// stat, err := file.Stat()
+		// if err != nil {
+		// 	log.Error("Error getting file size: %v\n", err)
+		// 	return
+		// }
+
 		loadResp.LoadFiles = append(loadResp.LoadFiles, file.Name())
 		reader := bufio.NewReaderSize(file, f.bufferSize)
 
@@ -133,12 +146,15 @@ func (f *FileReader) Read(reporter *report.Reporter, workers int, maxBytesPerTas
 				return
 			}
 			line, err := reader.ReadBytes(lineDelimiter)
-			if err == io.EOF && len(line) == 0 {
+
+			totalBytes += int64(len(line))
+
+			if (totalBytes > endOffset) || (err == io.EOF && len(line) == 0) {
 				file.Close()
 				break
 			} else if err != nil {
 				log.Errorf("Read file failed, error message: %v, before retrying, we suggest:\n1.Check the input data files and fix if there is any problem.\n2.Do select count(*) to check whether data is partially loaded.\n3.If the data is partially loaded and duplication is unacceptable, consider dropping the table (with caution that all data in the table will be lost) and retry.\n4.Otherwise, just retry.\n", err)
-				if len(line) !=0 {
+				if len(line) != 0 {
 					log.Error("5.When using a specified line delimiter, the file must end with that delimiter.")
 				}
 				os.Exit(1)
